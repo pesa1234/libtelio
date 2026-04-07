@@ -172,14 +172,24 @@ graph LR
         192.168.111.254"])
   end
 
-  %% Network openwrt-net-01
-  subgraph openwrt-net-01[openwrt-net-01]
+  %% Network openwrt-net-24-10
+  subgraph openwrt-net-24-10[openwrt-net-24-10]
   direction LR
-    openwrt-client-01("openwrt-client-01
+    openwrt-client-24-10("openwrt-client-24-10
         192.168.115.100")
-    openwrt-gw-01(["openwrt-gw-01
+    openwrt-gw-24-10(["openwrt-gw-24-10
         10.0.254.14
         192.168.115.254"])
+  end
+
+  %% Network openwrt-net-25-12
+  subgraph openwrt-net-25-12[openwrt-net-25-12]
+  direction LR
+    openwrt-client-25-12("openwrt-client-25-12
+        192.168.116.100")
+    openwrt-gw-25-12(["openwrt-gw-25-12
+        10.0.254.22
+        192.168.116.254"])
   end
 
   %% Network windows-net-01
@@ -260,7 +270,8 @@ graph LR
   upnp-gw-02 -..- internet
   udp-block-gw-01 -..- internet
   udp-block-gw-02 -..- internet
-  openwrt-gw-01 -..- internet
+  openwrt-gw-24-10 -..- internet
+  openwrt-gw-25-12 -..- internet
   windows-gw-01 -..- internet
   windows-gw-02 -..- internet
   windows-gw-03 -..- internet
@@ -281,7 +292,8 @@ graph LR
   upnp-client-02 -.- upnp-gw-02
   udp-block-client-01 -.- udp-block-gw-01
   udp-block-client-02 -.- udp-block-gw-02
-  openwrt-client-01 -.- openwrt-gw-01
+  openwrt-client-24-10 -.- openwrt-gw-24-10
+  openwrt-client-25-12 -.- openwrt-gw-25-12
   windows-client-01 -.- windows-gw-01
   windows-client-01 -.- windows-gw-02
   windows-client-02 -.- windows-gw-03
