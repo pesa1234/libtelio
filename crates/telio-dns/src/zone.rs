@@ -365,3 +365,30 @@ mod tests {
         validate_record(&zone, "gamma.nord", None, Some(gamma_ipv6)).await;
     }
 }
+
+#[cfg(test)]
+mod error_tests {
+    use super::*;
+    use std::net::IpAddr;
+    use telio_model::features::TtlValue;
+
+    // Helper for tests: creates Records with one entry (domain, ip)
+    // Used to test zone validation
+    fn make_records(domain: &str, ip: IpAddr) -> Records {
+        let mut records = Records::new();
+        records.insert(domain.to_string(), vec![ip]);
+        records
+    }
+
+    // Test: returns Error::RecordOutsideZone if record domain does not match zone
+    #[tokio::test]
+    async fn returns_record_outside_zone_error() {
+        let records = make_records("domain.bad.", IpAddr::from([1, 2, 3, 4]));
+        let result = AuthoritativeZone::new("nord", &records, TtlValue(60)).await;
+        assert!(matches!(
+            result,
+            Err(Error::RecordOutsideZone { ref domain, ref zone })
+                if domain == "domain.bad." && zone == "nord"
+        ));
+    }
+}
