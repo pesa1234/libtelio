@@ -1,6 +1,5 @@
 import asyncio
 import secrets
-import subprocess
 import sys
 from .process import Process, ProcessExecError, StreamCallback
 from aiodocker.containers import DockerContainer
@@ -11,6 +10,8 @@ from tests.utils.asyncio_util import run_async_context
 from tests.utils.logger import log
 from tests.utils.moose import MOOSE_LOGS_DIR
 from typing import List, Optional, AsyncIterator
+
+_PROCESS_START_TIMEOUT = 10.0  # seconds to wait for exec PID to appear
 
 
 class DockerProcess(Process):
@@ -84,32 +85,7 @@ class DockerProcess(Process):
                 raise
             finally:
                 if self._execute:
-                    try:
-                        inspect = await self._execute.inspect()
-                        while inspect["Pid"] == 0 and inspect["ExitCode"] is None:
-                            inspect = await self._execute.inspect()
-                            await asyncio.sleep(0.01)
-                        if inspect["ExitCode"] is None:
-                            subprocess.run(
-                                [
-                                    "docker",
-                                    "exec",
-                                    "--privileged",
-                                    self._container.id,
-                                    "/opt/bin/kill_process_by_natlab_id",
-                                    self._kill_id,
-                                ],
-                                stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL,
-                            )
-                    except RuntimeError as e:
-                        if "Session is closed" in str(e):
-                            log.debug(
-                                "[%s] Docker session closed during cleanup",
-                                self._container_name,
-                            )
-                        else:
-                            raise
+                    await self._kill_exec_if_running()
                 self._stream = None
 
         try:
@@ -125,8 +101,9 @@ class DockerProcess(Process):
         exit_code = inspect["ExitCode"]
 
         # 0 success
-        # suppress 137 linux sigkill, since we kill those processes
-        if exit_code and exit_code not in [0, 137]:
+        # 137 = SIGKILL (128+9), 143 = SIGTERM (128+15) — both are expected
+        # when the process is intentionally killed during cleanup
+        if exit_code and exit_code not in [0, 137, 143]:
             raise ProcessExecError(
                 exit_code,
                 self._container_name,
@@ -136,6 +113,60 @@ class DockerProcess(Process):
             )
 
         return self
+
+    async def _wait_for_process_start(self) -> dict:
+        """Poll exec inspect until a PID or exit code appears.
+
+        Raises ``asyncio.TimeoutError`` if the process does not start
+        within ``_PROCESS_START_TIMEOUT`` seconds.
+        """
+        assert self._execute is not None
+        execute = self._execute
+
+        async def _poll() -> dict:
+            while True:
+                info = await execute.inspect()
+                if info["Pid"] != 0 or info["ExitCode"] is not None:
+                    return info
+                await asyncio.sleep(0.01)
+
+        return await asyncio.wait_for(_poll(), timeout=_PROCESS_START_TIMEOUT)
+
+    async def _kill_exec_if_running(self) -> None:
+        """Wait for the exec to start, then kill it if it hasn't exited."""
+        try:
+            info = await self._wait_for_process_start()
+            if info["ExitCode"] is None:
+                proc = await asyncio.create_subprocess_exec(
+                    "docker",
+                    "exec",
+                    "--privileged",
+                    self._container.id,
+                    "/opt/bin/kill_process_by_natlab_id",
+                    self._kill_id,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, stderr = await proc.communicate()
+                if proc.returncode != 0:
+                    log.warning(
+                        "[%s] Cleanup failed: %s",
+                        self._container_name,
+                        (stdout or b"").decode() + (stderr or b"").decode(),
+                    )
+        except asyncio.TimeoutError:
+            log.warning(
+                "[%s] Timed out waiting for exec process to start during cleanup",
+                self._container_name,
+            )
+        except RuntimeError as e:
+            if "Session is closed" in str(e):
+                log.debug(
+                    "[%s] Docker session closed during cleanup",
+                    self._container_name,
+                )
+            else:
+                raise
 
     @asynccontextmanager
     async def run(
@@ -155,39 +186,7 @@ class DockerProcess(Process):
                 yield self
             finally:
                 if self._execute:
-                    try:
-                        inspect = await self._execute.inspect()
-                        while inspect["Pid"] == 0 and inspect["ExitCode"] is None:
-                            inspect = await self._execute.inspect()
-                            await asyncio.sleep(0.01)
-                        if inspect["ExitCode"] is None:
-                            proc = subprocess.run(
-                                [
-                                    "docker",
-                                    "exec",
-                                    "--privileged",
-                                    self._container.id,
-                                    "/opt/bin/kill_process_by_natlab_id",
-                                    self._kill_id,
-                                ],
-                                stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE,
-                                text=True,
-                            )
-                            if proc.returncode != 0:
-                                log.warning(
-                                    "[%s] Cleanup failed: %s",
-                                    self._container_name,
-                                    proc.stdout + proc.stderr,
-                                )
-                    except RuntimeError as e:
-                        if "Session is closed" in str(e):
-                            log.debug(
-                                "[%s] Docker session closed during cleanup",
-                                self._container_name,
-                            )
-                        else:
-                            raise
+                    await self._kill_exec_if_running()
 
     async def _read_loop(
         self,
